@@ -2,11 +2,13 @@
 
 use reqwasm::http::Request;
 use serde::Deserialize;
-use yew::{function_component, html, Callback, Html, Properties};
-use yew_query::{query_response, use_query, QueryState, QueryStatus as Status, QueryClientProvider, QueryClient};
+use yew::{function_component, html, use_state, Callback, Html, Properties};
+use yew_query::{
+    query_response, use_query, QueryClient, QueryClientProvider, QueryState, QueryStatus as Status,
+};
 
 #[derive(Clone, PartialEq, Deserialize, Debug)]
-struct Post {
+pub struct Post {
     id: usize,
     title: String,
     body: String,
@@ -14,8 +16,8 @@ struct Post {
 
 query_response! {
     Response {
-        posts -> Vec<Post>,
         post -> Post,
+        posts -> Vec<Post>
     }
 }
 
@@ -40,13 +42,14 @@ fn use_posts() -> QueryState<Response> {
 }
 
 #[derive(Clone, Properties, PartialEq)]
-struct PostProps {
+struct PostsProps {
     set_post_id: Callback<usize>,
 }
 
 #[function_component(Posts)]
-fn posts(props: &PostProps) -> Html {
+fn posts(props: &PostsProps) -> Html {
     let posts = use_posts();
+    let set_post_id = props.set_post_id.clone();
 
     html! {
         <div>
@@ -56,26 +59,36 @@ fn posts(props: &PostProps) -> Html {
                     match posts.status {
                         Status::Loading => html! { "Loading..." },
                         Status::Success(data) => {
-                            let posts_iter = data
-                                    .get_posts()
-                                    .iter()
-                                    .map(|post| {
-                                        let set_post_id = props.set_post_id.clone();
-                                        html! {
-                                            <p>
-                                                <a onclick={ move |_| set_post_id.emit(post.id) } href="#">
-                                                    { post.title.clone() }
-                                                </a>
-                                            </p>
-                                        }
-                                    });
-
                             html! {
                                 <>
                                     <div>
-                                        { for posts_iter }
+                                        { data
+                                            .get_posts()
+                                            .to_owned()
+                                            .iter()
+                                            .map(|post| {
+                                                let post = post.clone();
+                                                let set_post_id = set_post_id.clone();
+
+                                                html! {
+                                                    <a
+                                                        onclick={move |_| set_post_id.emit(post.id.clone()) }
+                                                        href="#"
+                                                    >
+                                                        { post.title.clone() }
+                                                    </a>
+                                                }
+                                            })
+                                            .collect::<Html>()
+                                        }
                                     </div>
-                                    <div>{ if post.is_fetching { html! { "Background Updating..." } } }</div>
+                                    <div>{
+                                      if posts.is_fetching {
+                                        html! { "Background Updating..." }
+                                      } else {
+                                        html! {}
+                                      }
+                                    }</div>
                                 </>
                             }
                         },
@@ -89,12 +102,12 @@ fn posts(props: &PostProps) -> Html {
     }
 }
 
-fn get_post_by_id(id: usize) {
-    Request::get(format!("https://jsonplaceholder.typicode.com/posts/{}", id))
+async fn get_post_by_id(id: usize) -> Post {
+    Request::get(format!("https://jsonplaceholder.typicode.com/posts/{}", id).as_ref())
         .send()
         .await
         .unwrap()
-        .json::<Post>()
+        .json()
         .await
         .unwrap()
 }
@@ -102,28 +115,27 @@ fn get_post_by_id(id: usize) {
 fn use_post(post_id: usize) -> QueryState<Response> {
     use_query(
         format!("post/{}", post_id).as_ref(),
-        |_| Box::pin(async move {
-          Ok(Response::Post(get_post_id(post_id).await))
-        }),
-        None
+        move |_| Box::pin(async move { Ok(Response::Post(get_post_by_id(post_id).await)) }),
+        None,
     )
 }
 
 #[derive(Clone, Properties, PartialEq)]
-struct PostProps {
+struct SinglePostProps {
     post_id: usize,
     set_post_id: Callback<usize>,
 }
 
-#[function_component(Post)]
-fn post(props: &PostProps) -> Html {
+#[function_component(SinglePost)]
+fn post(props: &SinglePostProps) -> Html {
     let post = use_post(props.post_id);
+    let post_id = props.post_id.clone();
     let set_post_id = props.set_post_id.clone();
 
     html! {
         <div>
             <div>
-                <a onclick={ move |_| set_post_id.emit(props.post_id)  } href="#">
+                <a onclick={ move |_| set_post_id.emit(post_id)  } href="#">
                     { "Back" }
                 </a>
             </div>
@@ -138,7 +150,13 @@ fn post(props: &PostProps) -> Html {
                                 <div>
                                     <p>{ post_data.body.clone() }</p>
                                 </div>
-                                <div>{ if post.is_fetching { html! { "Background Updating..." } } }</div>
+                                <div>{
+                                  if post.is_fetching {
+                                    html! { "Background Updating..." }
+                                  } else {
+                                    html! {}
+                                  }
+                                }</div>
                             </>
                         }
                     },
@@ -153,10 +171,13 @@ fn post(props: &PostProps) -> Html {
 
 #[function_component(App)]
 fn app() -> Html {
-    let client = use_state(|| QueryClient::<Response>::new())
+    let client = use_state(|| QueryClient::<Response>::new());
     let post_id = use_state(|| Option::<usize>::None);
 
-    let set_post_id = Callback::from(move |id| post_id.set(id));
+    let set_post_id = {
+        let post_id = post_id.clone();
+        Callback::from(move |id| post_id.set(Some(id)))
+    };
 
     html! {
         <QueryClientProvider<Response> client={(*client).clone()}>
@@ -168,9 +189,9 @@ fn app() -> Html {
             </p>
             {
                 if post_id.is_none() {
-                    html! { <Posts set_post_id={set_post_id.clone()} /> }
+                    html! { <Posts set_post_id={set_post_id} /> }
                 } else {
-                    html! { <Post post_id={post_id.clone().unwrap()} set_post_id={set_post_id.clone()} /> }
+                    html! { <SinglePost post_id={post_id.clone().unwrap()} set_post_id={set_post_id} /> }
                 }
             }
         </QueryClientProvider<Response>>

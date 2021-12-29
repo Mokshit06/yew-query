@@ -55,7 +55,6 @@ mod utils {
     use std::cell::RefCell;
     use std::cmp::PartialEq;
     use std::fmt::Debug;
-    use std::future::Future;
     use std::rc::Rc;
     use yew::Callback;
 
@@ -138,7 +137,7 @@ mod utils {
     {
         pub state: QueryState<TData>,
         pub query_fn: FnPtr<(), Res<TData>>,
-        pub subscribers: Vec<(Callback<()>)>,
+        pub subscribers: Vec<Callback<()>>,
         pub query_key: String,
     }
 
@@ -185,7 +184,7 @@ mod utils {
             }
         }
 
-        fn subscribe(&mut self, subscriber: &Subscriber<TData>, callback: Callback<()>) {
+        fn subscribe(&mut self, _subscriber: &Subscriber<TData>, callback: Callback<()>) {
             self.subscribers.push(callback);
         }
 
@@ -405,7 +404,7 @@ macro_rules! query_response {
                   pub fn [<get_ $field:lower>](&self) -> &$type {
                       match &self {
                           &$enum_name::[<$field:camel>](ref x) => x,
-                          &x => panic!("Expected: {}, Found: {}", format!("{}::{}", stringify!($enum_name), stringify!($field($type))), format!("{}::{:?}", stringify!($enum_name), x))
+                          &x => panic!("Expected: {}, Found: {}", format!("{}::{}{}", stringify!($enum_name), stringify!([<$field:camel>]), stringify!($type)), format!("{}::{:?}", stringify!($enum_name), x))
                       }
                   }
                 )*
