@@ -99,7 +99,7 @@ fn get_post_by_id(id: usize) {
         .unwrap()
 }
 
-fn use_post(post_id: usize) {
+fn use_post(post_id: usize) -> QueryState<Response> {
     use_query(
         format!("post/{}", post_id).as_ref(),
         |_| Box::pin(async move {
