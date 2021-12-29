@@ -1,0 +1,19 @@
+[package]
+name = "yew-query"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[workspace]
+members = [
+    "examples/basic"
+]
+
+[dependencies]
+yew = "0.19"
+web-sys = { version = "0.3.55", features = ["FormData", "HtmlFormElement"] }
+wasm-bindgen-futures = "0.4"
+# "innacurate" feature to change `performance.now()` to `Date.now()`
+instant = { version = "0.1.12", features = ["wasm-bindgen", "inaccurate"] }
+paste = "1.0.6"
