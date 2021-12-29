@@ -381,7 +381,9 @@ where
     }
 }
 
-pub use paste;
+pub mod __private {
+    pub use paste;
+}
 
 // TODO convert to `derive` macro
 #[macro_export]
@@ -389,9 +391,7 @@ macro_rules! query_response {
     ($enum_name:ident {
         $( $field:ident -> $type:ty ),*
     }) => {
-        use yew_query::paste::paste;
-
-        paste! {
+        yew_query::__private::paste::paste! {
             #[derive(Clone, PartialEq, Debug)]
             pub enum $enum_name {
                 $(
@@ -399,12 +399,19 @@ macro_rules! query_response {
                 )*
             }
 
+            fn panic_unexpected_type(field: &str, ty: &str, x: &$enum_name) -> ! {
+              let expected = format!("{}::{}({})", stringify!($enum_name), field, ty);
+              let found = format!("{}::{:?}", stringify!($enum_name), x);
+
+              panic!("Expected: {}, Found: {}", expected, found)
+            }
+
             impl $enum_name {
                 $(
                   pub fn [<get_ $field:lower>](&self) -> &$type {
                       match &self {
                             &$enum_name::[<$field:camel>](ref x) => x,
-                            &x => panic!("Expected: {}, Found: {}", format!("{}::{}{}", stringify!($enum_name), stringify!([<$field:camel>]), stringify!($type)), format!("{}::{:?}", stringify!($enum_name), x))
+                            &x => panic_unexpected_type(stringify!([<$field:camel>]), stringify!($type), &x)
                       }
                   }
                 )*
