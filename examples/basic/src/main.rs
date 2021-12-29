@@ -154,11 +154,11 @@ fn post(props: &SinglePostProps) -> Html {
                                     <p>{ post_data.body.clone() }</p>
                                 </div>
                                 <div>{
-                                  if post.is_fetching {
-                                    html! { "Background Updating..." }
-                                  } else {
-                                    html! {}
-                                  }
+                                    if post.is_fetching {
+                                        html! { "Background Updating..." }
+                                    } else {
+                                        html! {}
+                                    }
                                 }</div>
                             </>
                         }

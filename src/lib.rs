@@ -403,12 +403,20 @@ macro_rules! query_response {
                 $(
                   pub fn [<get_ $field:lower>](&self) -> &$type {
                       match &self {
-                          &$enum_name::[<$field:camel>](ref x) => x,
-                          &x => panic!("Expected: {}, Found: {}", format!("{}::{}{}", stringify!($enum_name), stringify!([<$field:camel>]), stringify!($type)), format!("{}::{:?}", stringify!($enum_name), x))
+                            &$enum_name::[<$field:camel>](ref x) => x,
+                            &x => panic!("Expected: {}, Found: {}", format!("{}::{}{}", stringify!($enum_name), stringify!([<$field:camel>]), stringify!($type)), format!("{}::{:?}", stringify!($enum_name), x))
                       }
                   }
                 )*
             }
+
+            $(
+                impl From<$type> for $enum_name {
+                    fn from([<$field:lower>]: $type) -> Self {
+                        Self::[<$field:camel>]([<$field:lower>])
+                    }
+                }
+            )*
         }
     }
 }
