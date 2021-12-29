@@ -4,7 +4,8 @@ use reqwasm::http::Request;
 use serde::Deserialize;
 use yew::{function_component, html, use_state, Callback, Html, Properties};
 use yew_query::{
-    query_response, use_query, QueryClient, QueryClientProvider, QueryState, QueryStatus as Status,
+    query_response, use_query, QueryClient, QueryClientProvider, QueryResult, QueryState,
+    QueryStatus as Status,
 };
 
 #[derive(Clone, PartialEq, Deserialize, Debug)]
@@ -102,20 +103,22 @@ fn posts(props: &PostsProps) -> Html {
     }
 }
 
-async fn get_post_by_id(id: usize) -> Post {
-    Request::get(format!("https://jsonplaceholder.typicode.com/posts/{}", id).as_ref())
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap()
+async fn get_post_by_id(id: usize) -> QueryResult<Response> {
+    Ok(Response::Post(
+        Request::get(format!("https://jsonplaceholder.typicode.com/posts/{}", id).as_ref())
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap(),
+    ))
 }
 
 fn use_post(post_id: usize) -> QueryState<Response> {
     use_query(
         format!("post/{}", post_id).as_ref(),
-        move |_| Box::pin(async move { Ok(Response::Post(get_post_by_id(post_id).await)) }),
+        move |_| Box::pin(get_post_by_id(post_id)),
         None,
     )
 }

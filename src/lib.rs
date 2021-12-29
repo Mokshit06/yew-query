@@ -48,10 +48,10 @@ pub fn now() -> i64 {
     instant::now() as i64
 }
 
-type Res<TData> = Result<TData, String>;
+pub type QueryResult<TData> = Result<TData, String>;
 
 mod utils {
-    use super::{now, FnPtr, Res};
+    use super::{now, FnPtr, QueryResult};
     use std::cell::RefCell;
     use std::cmp::PartialEq;
     use std::fmt::Debug;
@@ -64,7 +64,7 @@ mod utils {
         TData: Clone + PartialEq + Debug,
     {
         pub query_key: String,
-        pub query_fn: FnPtr<(), Res<TData>>,
+        pub query_fn: FnPtr<(), QueryResult<TData>>,
         pub stale_time: i64,
     }
 
@@ -136,7 +136,7 @@ mod utils {
         TData: Clone + PartialEq + Debug,
     {
         pub state: QueryState<TData>,
-        pub query_fn: FnPtr<(), Res<TData>>,
+        pub query_fn: FnPtr<(), QueryResult<TData>>,
         pub subscribers: Vec<Callback<()>>,
         pub query_key: String,
     }
