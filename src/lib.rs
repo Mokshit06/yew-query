@@ -1,6 +1,7 @@
 use std::cmp::PartialEq;
 use std::fmt::{self, Debug};
 use std::future::Future;
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::rc::Rc;
 
@@ -116,7 +117,9 @@ mod utils {
                 web_sys::console::log_1(&format!("query found {:#?}", *query).into());
                 Rc::clone(query)
             } else {
-                let query = Rc::new(RefCell::new(create_query(self.clone(), &options)));
+                let mut query = create_query(self.clone(), &options);
+                query.state.status = Status::Loading;
+                let query = Rc::new(RefCell::new(query));
                 queries.push(Rc::clone(&query));
                 // web_sys::console::log_1(&format!("Updated: {:#?}", self).into());
 
@@ -136,10 +139,11 @@ mod utils {
     }
 
     #[derive(Clone, PartialEq, Debug)]
-    pub enum QueryStatus<TData>
+    pub enum Status<TData>
     where
         TData: Clone + PartialEq + Debug,
     {
+        Idle,
         Loading,
         Success(TData),
         Error(String),
@@ -176,13 +180,13 @@ mod utils {
             match self.query_fn.emit(()).await {
                 Ok(data) => {
                     self.set_state(|old| QueryState {
-                        status: QueryStatus::Success(data.clone()),
+                        status: Status::Success(data.clone()),
                         last_updated: Some(now()),
                         ..old
                     });
                 }
                 Err(err) => self.set_state(|old| QueryState {
-                    status: QueryStatus::Error(err.clone()),
+                    status: Status::Error(err.clone()),
                     ..old
                 }),
             };
@@ -255,12 +259,19 @@ mod utils {
     where
         TData: Clone + PartialEq + Debug,
     {
-        pub status: QueryStatus<TData>,
+        pub status: Status<TData>,
         pub is_fetching: bool,
         pub last_updated: Option<i64>,
     }
 
-    impl<TData> QueryState<TData> where TData: Clone + PartialEq + Debug {}
+    impl<TData> QueryState<TData>
+    where
+        TData: Clone + PartialEq + Debug,
+    {
+        pub fn refetch() {
+            todo!()
+        }
+    }
 
     fn create_query<TData>(
         client: QueryClient<TData>,
@@ -272,7 +283,7 @@ mod utils {
         Query {
             client,
             state: QueryState {
-                status: QueryStatus::Loading,
+                status: Status::Idle,
                 is_fetching: true,
                 last_updated: None,
             },
@@ -363,7 +374,7 @@ mod utils {
     }
 }
 
-pub use utils::{Query, QueryClient, QueryOptions, QueryState, QueryStatus};
+pub use utils::{Query, QueryClient, QueryState, Status};
 use wasm_bindgen::JsCast;
 use web_sys::window;
 use yew::{
@@ -371,12 +382,12 @@ use yew::{
     Children, ContextProvider, Properties,
 };
 
-pub struct UseQueryOptions {
+pub struct QueryOptions {
     pub stale_time: Option<i64>,
     pub cache_time: Option<i32>,
 }
 
-impl Default for UseQueryOptions {
+impl Default for QueryOptions {
     fn default() -> Self {
         Self {
             stale_time: None,
@@ -392,10 +403,45 @@ impl Default for UseQueryOptions {
 
 const FIX_MINUTES_MS: i32 = 5 * 60 * 1000;
 
+pub struct MutationState<TData>
+where
+    TData: Clone + PartialEq + Debug,
+{
+    pub status: Status<TData>,
+}
+
+#[derive(Default)]
+pub struct MutationOptions<Rt, F>
+where
+    F: Fn(Rt),
+{
+    pub on_success: Option<F>,
+    pub on_settled: Option<F>,
+    pub on_error: Option<F>,
+    return_type: PhantomData<Rt>,
+}
+
+pub fn use_mutation<Arg, Rt, Cb, F>(
+    func: F,
+    options: MutationOptions<Rt, F>,
+) -> (Box<F>, MutationState<Rt>)
+where
+    Rt: Clone + PartialEq + Debug,
+    Cb: 'static + Fn(()) -> Pin<Box<dyn Future<Output = Result<Rt, String>>>>,
+    F: Fn(Rt),
+{
+    (
+        Box::new(func),
+        MutationState {
+            status: Status::Idle,
+        },
+    )
+}
+
 pub fn use_query<TData, F>(
     query_key: &str,
     query_fn: F,
-    options: UseQueryOptions,
+    options: QueryOptions,
 ) -> utils::QueryState<TData>
 where
     TData: Clone + PartialEq + Debug + 'static,
@@ -530,7 +576,7 @@ where
 
 // #[cfg(feature = "devtools")]
 pub mod devtools {
-    use crate::{use_query_client, utils::QueryStatus};
+    use crate::{use_query_client, utils::Status};
     use yew::{function_component, html, use_effect_with_deps, use_state, Callback};
 
     #[function_component(QueryDevtools)]
@@ -538,7 +584,7 @@ pub mod devtools {
     where
         TData: Clone + PartialEq + std::fmt::Debug + 'static,
     {
-        let mut client = use_query_client::<TData>();
+        let client = use_query_client::<TData>();
         let rerender = {
             let c = use_state(|| 0);
             Callback::from(move |_: ()| {
@@ -565,9 +611,9 @@ pub mod devtools {
                             html! { <span style="">{ "fetching" }</span> }
                         } else if query.subscribers.len() == 0 {
                             html! { <span style="">{ "inactive" }</span> }
-                        } else if let QueryStatus::Success(_) = query.state.status {
+                        } else if let Status::Success(_) = query.state.status {
                             html! { <span style="">{ "success" }</span> }
-                        } else if let QueryStatus::Error(_) = query.state.status {
+                        } else if let Status::Error(_) = query.state.status {
                             html! { <span style="">{ "error" }</span> }
                         } else {
                             html! {}

@@ -5,8 +5,8 @@ use serde::Deserialize;
 use yew::{function_component, html, use_state, Callback, Html, Properties};
 use yew_query::devtools::QueryDevtools;
 use yew_query::{
-    query_response, use_query, QueryClient, QueryClientProvider, QueryResult, QueryState,
-    QueryStatus as Status, UseQueryOptions,
+    query_response, use_query, QueryClient, QueryClientProvider, QueryOptions, QueryResult,
+    QueryState, Status,
 };
 
 #[derive(Clone, PartialEq, Deserialize, Debug)]
@@ -39,7 +39,7 @@ fn use_posts() -> QueryState<Response> {
     use_query(
         "posts",
         |_| Box::pin(get_posts()),
-        UseQueryOptions {
+        QueryOptions {
             stale_time: Some(3000),
             ..Default::default()
         },
@@ -62,6 +62,7 @@ fn posts(props: &PostsProps) -> Html {
             <div>
                 {
                     match posts.status {
+                        Status::Idle => html! {},
                         Status::Loading => html! { "Loading..." },
                         Status::Success(data) => {
                             html! {
@@ -123,7 +124,7 @@ fn use_post(post_id: usize) -> QueryState<Response> {
     use_query(
         format!("post/{}", post_id).as_ref(),
         move |_| Box::pin(get_post_by_id(post_id)),
-        UseQueryOptions::default(),
+        QueryOptions::default(),
     )
 }
 
@@ -148,6 +149,7 @@ fn post(props: &SinglePostProps) -> Html {
             </div>
             {
                 match post.status {
+                    Status::Idle => html! {},
                     Status::Loading => html! { "Loading..." },
                     Status::Success(data) => {
                         let post_data = data.get_post();
