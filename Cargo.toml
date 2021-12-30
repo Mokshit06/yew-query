@@ -18,3 +18,4 @@ wasm-bindgen-futures = "0.4"
 instant = { version = "0.1.12", features = ["wasm-bindgen", "inaccurate"] }
 paste = "1.0.6"
 wasm-bindgen = { version = "^0.2" }
+js-sys = "0.3.55"

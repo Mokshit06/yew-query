@@ -73,7 +73,7 @@ mod utils {
     #[derive(PartialEq, Debug)]
     pub struct QueryClient<TData>
     where
-        TData: Clone + PartialEq + Debug,
+        TData: Clone + PartialEq + Debug + 'static,
     {
         pub queries: Rc<RefCell<Vec<Rc<RefCell<Query<TData>>>>>>,
     }
@@ -135,13 +135,13 @@ mod utils {
     #[derive(Clone, PartialEq, Debug)]
     pub struct Query<TData>
     where
-        TData: Clone + PartialEq + Debug,
+        TData: Clone + PartialEq + Debug + 'static,
     {
         // change to lifetime reference
         client: QueryClient<TData>,
         pub state: QueryState<TData>,
         pub query_fn: FnPtr<(), QueryResult<TData>>,
-        subscribers: Vec<Callback<()>>,
+        pub subscribers: Vec<(Subscriber<TData>, Callback<()>)>,
         pub query_key: String,
         pub cache_time: i32,
         timeout: Option<i32>,
@@ -185,13 +185,13 @@ mod utils {
 
         fn set_state(&mut self, updater: impl Fn(QueryState<TData>) -> QueryState<TData>) {
             self.state = updater(self.state.clone());
-            for cb in &self.subscribers {
+            for (_, cb) in &self.subscribers {
                 cb.emit(());
             }
         }
 
-        fn subscribe(&mut self, _subscriber: &Subscriber<TData>, callback: Callback<()>) {
-            self.subscribers.push(callback);
+        fn subscribe(&mut self, subscriber: Subscriber<TData>, callback: Callback<()>) {
+            self.subscribers.push((subscriber, callback));
             self.unschedule_query_cleanup();
         }
 
@@ -200,7 +200,10 @@ mod utils {
                 .subscribers
                 .iter()
                 .cloned()
-                .filter(|sub| sub.clone() == callback)
+                // if stored callback and callback passed to `unsubscribe`
+                // are equal, then the subscribers should also be equal
+                // since they are created at the same time
+                .filter(|(_, cb)| cb.clone() == callback)
                 .collect::<Vec<_>>();
 
             if self.subscribers.len() == 0 {
@@ -303,7 +306,7 @@ mod utils {
         pub fn subscribe(&mut self, callback: Callback<()>) {
             web_sys::console::log_1(&"`subscribe`: TRYING TO BORROW".into());
             let mut x = (*self.query).borrow_mut();
-            x.subscribe(&self, callback);
+            x.subscribe(self.clone(), callback);
             std::mem::drop(x);
             self.fetch();
         }
@@ -348,6 +351,8 @@ mod utils {
 }
 
 pub use utils::{Query, QueryClient, QueryOptions, QueryState, QueryStatus};
+use wasm_bindgen::JsCast;
+use web_sys::window;
 use yew::{
     function_component, html, use_context, use_effect_with_deps, use_mut_ref, use_state, Callback,
     Children, ContextProvider, Properties,
@@ -434,7 +439,7 @@ where
 #[derive(Properties, PartialEq)]
 pub struct QueryClientProviderProps<T>
 where
-    T: Clone + Debug + PartialEq,
+    T: Clone + Debug + PartialEq + 'static,
 {
     pub client: QueryClient<T>,
     #[prop_or_default]
@@ -453,6 +458,56 @@ pub fn query_client_provider<T>(props: &QueryClientProviderProps<T>) -> Html
 where
     T: Clone + Debug + PartialEq + 'static,
 {
+    let client = props.client.clone();
+
+    {
+        let queries = client.queries.clone();
+
+        use_effect_with_deps(
+            move |_| {
+                let closure = wasm_bindgen::closure::Closure::wrap(Box::new(move || {
+                    for query in (queries).borrow_mut().iter() {
+                        for (subscriber, _) in &mut query.borrow_mut().subscribers {
+                            subscriber.fetch()
+                        }
+                    }
+                })
+                    as Box<dyn FnMut()>);
+                let on_focus = closure.as_ref().unchecked_ref::<js_sys::Function>();
+
+                let window = window().expect("Couldn't access `window`");
+
+                window
+                    .add_event_listener_with_callback_and_bool(
+                        "visibilitychange",
+                        &on_focus.clone(),
+                        false,
+                    )
+                    .unwrap();
+                window
+                    .add_event_listener_with_callback_and_bool("focus", &on_focus.clone(), false)
+                    .unwrap();
+
+                {
+                    let on_focus = on_focus.clone();
+
+                    move || {
+                        window
+                            .remove_event_listener_with_callback(
+                                "visibilitychange",
+                                &on_focus.clone(),
+                            )
+                            .unwrap();
+                        window
+                            .remove_event_listener_with_callback("focus", &on_focus.clone())
+                            .unwrap()
+                    }
+                }
+            },
+            client,
+        );
+    }
+
     html! {
         <ContextProvider<QueryClient<T>> context={props.client.clone()}>
             { for props.children.iter() }
