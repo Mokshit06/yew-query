@@ -5,7 +5,7 @@ use serde::Deserialize;
 use yew::{function_component, html, use_state, Callback, Html, Properties};
 use yew_query::{
     query_response, use_query, QueryClient, QueryClientProvider, QueryResult, QueryState,
-    QueryStatus as Status,
+    QueryStatus as Status, UseQueryOptions,
 };
 
 #[derive(Clone, PartialEq, Deserialize, Debug)]
@@ -22,23 +22,26 @@ query_response! {
     }
 }
 
+async fn get_posts() -> QueryResult<Response> {
+    Ok(Response::Posts(
+        Request::get("https://jsonplaceholder.typicode.com/posts")
+            .send()
+            .await
+            .map_err(|err| err.to_string())?
+            .json()
+            .await
+            .map_err(|err| err.to_string())?,
+    ))
+}
+
 fn use_posts() -> QueryState<Response> {
     use_query(
         "posts",
-        |_| {
-            Box::pin(async {
-                Ok(Response::Posts(
-                    Request::get("https://jsonplaceholder.typicode.com/posts")
-                        .send()
-                        .await
-                        .unwrap()
-                        .json()
-                        .await
-                        .unwrap(),
-                ))
-            })
+        |_| Box::pin(get_posts()),
+        UseQueryOptions {
+            stale_time: Some(3000),
+            ..Default::default()
         },
-        None,
     )
 }
 
@@ -108,10 +111,10 @@ async fn get_post_by_id(id: usize) -> QueryResult<Response> {
         Request::get(format!("https://jsonplaceholder.typicode.com/posts/{}", id).as_ref())
             .send()
             .await
-            .unwrap()
-            .json()
+            .map_err(|err| err.to_string())?
+            .json::<Post>()
             .await
-            .unwrap(),
+            .map_err(|err| err.to_string())?,
     ))
 }
 
@@ -119,7 +122,7 @@ fn use_post(post_id: usize) -> QueryState<Response> {
     use_query(
         format!("post/{}", post_id).as_ref(),
         move |_| Box::pin(get_post_by_id(post_id)),
-        None,
+        UseQueryOptions::default(),
     )
 }
 

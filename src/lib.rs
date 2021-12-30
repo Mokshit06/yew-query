@@ -56,6 +56,7 @@ mod utils {
     use std::cmp::PartialEq;
     use std::fmt::Debug;
     use std::rc::Rc;
+    use wasm_bindgen::JsCast;
     use yew::Callback;
 
     #[derive(Clone)]
@@ -66,6 +67,7 @@ mod utils {
         pub query_key: String,
         pub query_fn: FnPtr<(), QueryResult<TData>>,
         pub stale_time: i64,
+        pub cache_time: i32,
     }
 
     #[derive(PartialEq, Debug)]
@@ -111,7 +113,7 @@ mod utils {
                 web_sys::console::log_1(&format!("query found {:#?}", *query).into());
                 Rc::clone(query)
             } else {
-                let query = Rc::new(RefCell::new(create_query(&options)));
+                let query = Rc::new(RefCell::new(create_query(self.clone(), &options)));
                 queries.push(Rc::clone(&query));
                 // web_sys::console::log_1(&format!("Updated: {:#?}", self).into());
 
@@ -135,10 +137,14 @@ mod utils {
     where
         TData: Clone + PartialEq + Debug,
     {
+        // change to lifetime reference
+        client: QueryClient<TData>,
         pub state: QueryState<TData>,
         pub query_fn: FnPtr<(), QueryResult<TData>>,
-        pub subscribers: Vec<Callback<()>>,
+        subscribers: Vec<Callback<()>>,
         pub query_key: String,
+        pub cache_time: i32,
+        timeout: Option<i32>,
     }
 
     impl<TData> Query<TData>
@@ -186,16 +192,46 @@ mod utils {
 
         fn subscribe(&mut self, _subscriber: &Subscriber<TData>, callback: Callback<()>) {
             self.subscribers.push(callback);
+            self.unschedule_query_cleanup();
         }
 
-        // fn unsubscribe(&mut self, subscriber: &Subscriber<T, TData>) {
-        //     self.subscribers = self
-        //         .subscribers
-        //         .clone()
-        //         .into_iter()
-        //         .filter(|sub| sub == subscriber)
-        //         .collect::<Vec<_>>();
-        // }
+        fn unsubscribe(&mut self, callback: Callback<()>) {
+            self.subscribers = self
+                .subscribers
+                .iter()
+                .cloned()
+                .filter(|sub| sub.clone() == callback)
+                .collect::<Vec<_>>();
+
+            if self.subscribers.len() == 0 {
+                self.schedule_query_cleanup();
+            }
+        }
+
+        fn schedule_query_cleanup(&mut self) {
+            let timeout = web_sys::window()
+                .expect("Couldn't access `window`")
+                .set_timeout_with_callback_and_timeout_and_arguments_0(
+                    wasm_bindgen::closure::Closure::wrap(Box::new(|| {
+                        web_sys::console::log_1(&"works i guess".into())
+                    })
+                        as Box<dyn FnMut()>)
+                    .as_ref()
+                    .unchecked_ref(),
+                    self.cache_time,
+                )
+                .expect("`setTimeout` didn't register");
+
+            self.timeout = Some(timeout);
+        }
+
+        fn unschedule_query_cleanup(&mut self) {
+            if let Some(timeout) = self.timeout {
+                web_sys::window()
+                    .expect("Couldn't access `window`")
+                    .clear_timeout_with_handle(timeout)
+            }
+        }
     }
 
     #[derive(Clone, PartialEq, Debug)]
@@ -210,11 +246,15 @@ mod utils {
 
     impl<TData> QueryState<TData> where TData: Clone + PartialEq + Debug {}
 
-    fn create_query<TData>(options: &QueryOptions<TData>) -> Query<TData>
+    fn create_query<TData>(
+        client: QueryClient<TData>,
+        options: &QueryOptions<TData>,
+    ) -> Query<TData>
     where
         TData: Clone + PartialEq + Debug,
     {
-        let query = Query {
+        Query {
+            client,
             state: QueryState {
                 status: QueryStatus::Loading,
                 is_fetching: true,
@@ -223,18 +263,28 @@ mod utils {
             query_fn: options.query_fn.clone(),
             subscribers: vec![],
             query_key: options.query_key.clone(),
-        };
-
-        query
+            cache_time: options.cache_time,
+            timeout: None,
+        }
     }
 
     #[derive(Clone, PartialEq, Debug)]
     pub struct Subscriber<TData>
     where
-        TData: Clone + PartialEq + Debug,
+        TData: Clone + PartialEq + Debug + 'static,
     {
         query: Rc<RefCell<Query<TData>>>,
         stale_time: i64,
+        cache_time: i32,
+    }
+
+    impl<T> Drop for Subscriber<T>
+    where
+        T: Clone + PartialEq + Debug + 'static,
+    {
+        fn drop(&mut self) {
+            web_sys::console::log_1(&"DROPPING SUBSCRIBER".into())
+        }
     }
 
     impl<TData> Subscriber<TData>
@@ -256,6 +306,10 @@ mod utils {
             x.subscribe(&self, callback);
             std::mem::drop(x);
             self.fetch();
+        }
+
+        pub fn unsubscribe(&mut self, callback: Callback<()>) {
+            (*self.query).borrow_mut().unsubscribe(callback)
         }
 
         pub fn fetch(&mut self) {
@@ -285,12 +339,11 @@ mod utils {
     {
         let query = client.get_query(&options);
         // web_sys::console::log_1(&format!("{:#?}", query).into());
-        let observer = Subscriber {
+        Subscriber {
             query,
             stale_time: options.stale_time,
-        };
-
-        observer
+            cache_time: options.cache_time,
+        }
     }
 }
 
@@ -300,10 +353,31 @@ use yew::{
     Children, ContextProvider, Properties,
 };
 
+pub struct UseQueryOptions {
+    pub stale_time: Option<i64>,
+    pub cache_time: Option<i32>,
+}
+
+impl Default for UseQueryOptions {
+    fn default() -> Self {
+        Self {
+            stale_time: None,
+            // `cache_time` might not be required in rust, since its only there to trigger
+            // GC in react-query, which shouldn't be required in rust, since it doesn't have GC
+            // but Query is being stored in an `Rc`, so it wouldn't be dropped from memory
+            // automatically, unless all references are removed
+            // for which it would need to be removed from the `queries` vec.
+            cache_time: None,
+        }
+    }
+}
+
+const FIX_MINUTES_MS: i32 = 5 * 60 * 1000;
+
 pub fn use_query<TData, F>(
     query_key: &str,
     query_fn: F,
-    stale_time: Option<i64>,
+    options: UseQueryOptions,
 ) -> utils::QueryState<TData>
 where
     TData: Clone + PartialEq + Debug + 'static,
@@ -311,7 +385,7 @@ where
 {
     let query_fn = FnPtr::from(query_fn);
     let mut client = use_query_client::<TData>();
-    // web_sys::console::log_1(&format!("{:#?}", client).into());
+
     let rerender = {
         let c = use_state(|| 0);
         move || {
@@ -326,7 +400,8 @@ where
             utils::QueryOptions {
                 query_fn,
                 query_key: String::from(query_key),
-                stale_time: stale_time.unwrap_or(0),
+                stale_time: options.stale_time.unwrap_or(0),
+                cache_time: options.cache_time.unwrap_or(FIX_MINUTES_MS),
             },
         )
     });
@@ -338,11 +413,15 @@ where
         use_effect_with_deps(
             move |_| {
                 web_sys::console::log_1(&"rerender".into());
-                observer_ref
-                    .borrow_mut()
-                    .subscribe(Callback::from(move |_| rerender()));
 
-                || ()
+                let cb = Callback::<()>::from(move |_| rerender());
+                let mut observer = observer_ref.borrow_mut();
+                observer.subscribe(cb.clone());
+
+                {
+                    let mut observer = observer.clone();
+                    move || observer.unsubscribe(cb.clone())
+                }
             },
             (),
         );
@@ -385,7 +464,6 @@ pub mod __private {
     pub use paste;
 }
 
-// TODO convert to `derive` macro
 #[macro_export]
 macro_rules! query_response {
     ($enum_name:ident {
@@ -411,19 +489,19 @@ macro_rules! query_response {
                   pub fn [<get_ $field:lower>](&self) -> &$type {
                       match &self {
                             &$enum_name::[<$field:camel>](ref x) => x,
-                            &x => panic_unexpected_type(stringify!([<$field:camel>]), stringify!($type), &x)
+                            &unknown => panic_unexpected_type(stringify!([<$field:camel>]), stringify!($type), &unknown)
                       }
                   }
                 )*
             }
 
-            $(
-                impl From<$type> for $enum_name {
-                    fn from([<$field:lower>]: $type) -> Self {
-                        Self::[<$field:camel>]([<$field:lower>])
-                    }
-                }
-            )*
+            // $(
+            //     impl From<$type> for $enum_name {
+            //         fn from([<$field:lower>]: $type) -> Self {
+            //             Self::[<$field:camel>]([<$field:lower>])
+            //         }
+            //     }
+            // )*
         }
     }
 }

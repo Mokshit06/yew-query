@@ -17,3 +17,4 @@ wasm-bindgen-futures = "0.4"
 # "innacurate" feature to change `performance.now()` to `Date.now()`
 instant = { version = "0.1.12", features = ["wasm-bindgen", "inaccurate"] }
 paste = "1.0.6"
+wasm-bindgen = { version = "^0.2" }
