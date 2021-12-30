@@ -3,6 +3,7 @@
 use reqwasm::http::Request;
 use serde::Deserialize;
 use yew::{function_component, html, use_state, Callback, Html, Properties};
+use yew_query::devtools::QueryDevtools;
 use yew_query::{
     query_response, use_query, QueryClient, QueryClientProvider, QueryResult, QueryState,
     QueryStatus as Status, UseQueryOptions,
@@ -200,6 +201,7 @@ fn app() -> Html {
                     html! { <SinglePost post_id={post_id.clone().unwrap()} set_post_id={set_post_id} /> }
                 }
             }
+            <QueryDevtools<Response> />
         </QueryClientProvider<Response>>
     }
 }

@@ -7,6 +7,6 @@ edition = "2021"
 
 [dependencies]
 yew = "0.19"
-yew-query = { path = "../.." }
+yew-query = { path = "../..", features = ["devtools"] }
 reqwasm = "0.4.0"
 serde = { version = "1.0", features = ["derive"] }

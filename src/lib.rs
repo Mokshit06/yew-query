@@ -76,6 +76,7 @@ mod utils {
         TData: Clone + PartialEq + Debug + 'static,
     {
         pub queries: Rc<RefCell<Vec<Rc<RefCell<Query<TData>>>>>>,
+        subscribers: Rc<RefCell<Vec<Callback<()>>>>,
     }
 
     impl<TData> Clone for QueryClient<TData>
@@ -86,6 +87,7 @@ mod utils {
             // web_sys::console::log_1(&format!("CLONING QUERY CLIENT {:#?}", self).into());
             Self {
                 queries: Rc::clone(&self.queries),
+                subscribers: Rc::clone(&self.subscribers),
             }
         }
     }
@@ -97,6 +99,7 @@ mod utils {
         pub fn new() -> Self {
             Self {
                 queries: Rc::new(RefCell::new(vec![])),
+                subscribers: Rc::new(RefCell::new(vec![])),
             }
         }
 
@@ -119,6 +122,16 @@ mod utils {
 
                 query
             }
+        }
+
+        pub fn subscribe(&mut self, callback: Callback<()>) {
+            (*self.subscribers).borrow_mut().push(callback);
+        }
+
+        pub fn unsubscribe(&mut self, callback: Callback<()>) {
+            (*self.subscribers)
+                .borrow_mut()
+                .retain(|subscriber| subscriber.clone() == callback)
         }
     }
 
@@ -512,6 +525,76 @@ where
         <ContextProvider<QueryClient<T>> context={props.client.clone()}>
             { for props.children.iter() }
         </ContextProvider<QueryClient<T>>>
+    }
+}
+
+// #[cfg(feature = "devtools")]
+pub mod devtools {
+    use crate::{use_query_client, utils::QueryStatus};
+    use yew::{function_component, html, use_effect_with_deps, use_state, Callback};
+
+    #[function_component(QueryDevtools)]
+    pub fn query_devtools<TData>() -> Html
+    where
+        TData: Clone + PartialEq + std::fmt::Debug + 'static,
+    {
+        let mut client = use_query_client::<TData>();
+        let rerender = {
+            let c = use_state(|| 0);
+            Callback::from(move |_: ()| {
+                c.set(*c + 1);
+            })
+        };
+        let mut queries = {
+            let queries = (*client.queries).clone();
+
+            queries
+                .borrow_mut()
+                .sort_by_cached_key(|query| (*query).borrow().query_key.clone());
+
+            queries
+        };
+        let queries = queries.get_mut().iter().map(|query| {
+            let query = (**query).borrow();
+
+            html! {
+                <div style="">
+                    { format!("\"{}\" -", query.query_key.clone()) }
+                    <span style="">
+                        { if query.state.is_fetching {
+                            html! { <span style="">{ "fetching" }</span> }
+                        } else if query.subscribers.len() == 0 {
+                            html! { <span style="">{ "inactive" }</span> }
+                        } else if let QueryStatus::Success(_) = query.state.status {
+                            html! { <span style="">{ "success" }</span> }
+                        } else if let QueryStatus::Error(_) = query.state.status {
+                            html! { <span style="">{ "error" }</span> }
+                        } else {
+                            html! {}
+                        } }
+                    </span>
+                </div>
+            }
+        });
+
+        {
+            let mut client = client.clone();
+
+            use_effect_with_deps(
+                move |_| {
+                    client.subscribe(rerender.clone());
+
+                    move || client.unsubscribe(rerender.clone())
+                },
+                (),
+            )
+        }
+
+        html! {
+            <div style="background-color: black; color: white;">
+                {for queries}
+            </div>
+        }
     }
 }
 

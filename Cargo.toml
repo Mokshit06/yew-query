@@ -10,6 +10,9 @@ members = [
     "examples/basic"
 ]
 
+[features]
+devtools = []
+
 [dependencies]
 yew = "0.19"
 web-sys = { version = "0.3.55", features = ["FormData", "HtmlFormElement"] }
