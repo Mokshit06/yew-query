@@ -3,7 +3,6 @@
 use reqwasm::http::Request;
 use serde::Deserialize;
 use yew::{function_component, html, use_state, Callback, Html, Properties};
-use yew_query::devtools::QueryDevtools;
 use yew_query::{
     query_response, use_query, QueryClient, QueryClientProvider, QueryOptions, QueryResult,
     QueryState, Status,
@@ -78,7 +77,7 @@ fn posts(props: &PostsProps) -> Html {
 
                                                 html! {
                                                     <a
-                                                        onclick={move |_| set_post_id.emit(post.id.clone()) }
+                                                        onclick={move |_| set_post_id.emit(post.id) }
                                                         href="#"
                                                     >
                                                         { post.title.clone() }
@@ -137,7 +136,7 @@ struct SinglePostProps {
 #[function_component(SinglePost)]
 fn post(props: &SinglePostProps) -> Html {
     let post = use_post(props.post_id);
-    let post_id = props.post_id.clone();
+    let post_id = props.post_id;
     let set_post_id = props.set_post_id.clone();
 
     html! {
@@ -180,7 +179,7 @@ fn post(props: &SinglePostProps) -> Html {
 
 #[function_component(App)]
 fn app() -> Html {
-    let client = use_state(|| QueryClient::<Response>::new());
+    let client = use_state(QueryClient::new);
     let post_id = use_state(|| Option::<usize>::None);
 
     let set_post_id = {
@@ -200,10 +199,10 @@ fn app() -> Html {
                 if post_id.is_none() {
                     html! { <Posts set_post_id={set_post_id} /> }
                 } else {
-                    html! { <SinglePost post_id={post_id.clone().unwrap()} set_post_id={set_post_id} /> }
+                    html! { <SinglePost post_id={post_id.unwrap()} set_post_id={set_post_id} /> }
                 }
             }
-            <QueryDevtools<Response> />
+            // <QueryDevtools<Response> />
         </QueryClientProvider<Response>>
     }
 }

@@ -5,8 +5,10 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::rc::Rc;
 
+type CB<Arg, Rt> = dyn Fn(Arg) -> Pin<Box<dyn Future<Output = Rt>>>;
+
 pub struct FnPtr<Arg, Rt> {
-    cb: Rc<dyn Fn(Arg) -> Pin<Box<dyn Future<Output = Rt>>>>,
+    cb: Rc<CB<Arg, Rt>>,
 }
 
 impl<Arg, Rt, F> From<F> for FnPtr<Arg, Rt>
@@ -20,6 +22,7 @@ where
 
 impl<Arg, Rt> PartialEq for FnPtr<Arg, Rt> {
     fn eq(&self, other: &Self) -> bool {
+        #[allow(clippy::vtable_address_comparisons)]
         Rc::ptr_eq(&self.cb, &other.cb)
     }
 }
@@ -71,12 +74,14 @@ mod utils {
         pub cache_time: i32,
     }
 
+    type Queries<TData> = Rc<RefCell<Vec<Rc<RefCell<Query<TData>>>>>>;
+
     #[derive(PartialEq, Debug)]
     pub struct QueryClient<TData>
     where
         TData: Clone + PartialEq + Debug + 'static,
     {
-        pub queries: Rc<RefCell<Vec<Rc<RefCell<Query<TData>>>>>>,
+        pub queries: Queries<TData>,
         subscribers: Rc<RefCell<Vec<Callback<()>>>>,
     }
 
@@ -85,7 +90,6 @@ mod utils {
         TData: Clone + PartialEq + Debug,
     {
         fn clone(&self) -> Self {
-            // web_sys::console::log_1(&format!("CLONING QUERY CLIENT {:#?}", self).into());
             Self {
                 queries: Rc::clone(&self.queries),
                 subscribers: Rc::clone(&self.subscribers),
@@ -104,6 +108,17 @@ mod utils {
             }
         }
 
+        pub async fn invalidate_queries(&self, query_key: &str) {
+            let queries = (*self.queries).borrow_mut();
+            let query = queries
+                .iter()
+                .find(|&query| query.borrow().query_key == query_key);
+
+            if let Some(query) = query {
+                (*query).borrow_mut().fetch().await
+            }
+        }
+
         fn get_query(&mut self, options: &QueryOptions<TData>) -> Rc<RefCell<Query<TData>>> {
             let query_key = options.query_key.clone();
             let mut queries = (*self.queries).borrow_mut();
@@ -117,13 +132,19 @@ mod utils {
                 web_sys::console::log_1(&format!("query found {:#?}", *query).into());
                 Rc::clone(query)
             } else {
-                let mut query = create_query(self.clone(), &options);
+                let mut query = create_query(self.clone(), options);
                 query.state.status = Status::Loading;
                 let query = Rc::new(RefCell::new(query));
                 queries.push(Rc::clone(&query));
                 // web_sys::console::log_1(&format!("Updated: {:#?}", self).into());
 
                 query
+            }
+        }
+
+        pub fn notify(&self) {
+            for subscriber in (*self.subscribers).borrow().iter() {
+                subscriber.emit(())
             }
         }
 
@@ -135,6 +156,15 @@ mod utils {
             (*self.subscribers)
                 .borrow_mut()
                 .retain(|subscriber| subscriber.clone() == callback)
+        }
+    }
+
+    impl<TData> Default for QueryClient<TData>
+    where
+        TData: Clone + PartialEq + Debug,
+    {
+        fn default() -> Self {
+            Self::new()
         }
     }
 
@@ -205,6 +235,7 @@ mod utils {
             for (_, cb) in &self.subscribers {
                 cb.emit(());
             }
+            self.client.notify();
         }
 
         fn subscribe(&mut self, subscriber: Subscriber<TData>, callback: Callback<()>) {
@@ -223,17 +254,26 @@ mod utils {
                 .filter(|(_, cb)| cb.clone() == callback)
                 .collect::<Vec<_>>();
 
-            if self.subscribers.len() == 0 {
+            if self.subscribers.is_empty() {
                 self.schedule_query_cleanup();
             }
         }
 
         fn schedule_query_cleanup(&mut self) {
+            let query_key = self.query_key.clone();
+            let queries = (self.client.queries).clone();
+            let client = self.client.clone();
+
             let timeout = web_sys::window()
                 .expect("Couldn't access `window`")
                 .set_timeout_with_callback_and_timeout_and_arguments_0(
-                    wasm_bindgen::closure::Closure::wrap(Box::new(|| {
-                        web_sys::console::log_1(&"works i guess".into())
+                    wasm_bindgen::closure::Closure::wrap(Box::new(move || {
+                        let query_key = query_key.clone();
+                        queries
+                            .borrow_mut()
+                            .retain(move |query| (*query).borrow_mut().query_key != query_key);
+
+                        client.notify()
                     })
                         as Box<dyn FnMut()>)
                     .as_ref()
@@ -382,23 +422,10 @@ use yew::{
     Children, ContextProvider, Properties,
 };
 
+#[derive(Default)]
 pub struct QueryOptions {
     pub stale_time: Option<i64>,
     pub cache_time: Option<i32>,
-}
-
-impl Default for QueryOptions {
-    fn default() -> Self {
-        Self {
-            stale_time: None,
-            // `cache_time` might not be required in rust, since its only there to trigger
-            // GC in react-query, which shouldn't be required in rust, since it doesn't have GC
-            // but Query is being stored in an `Rc`, so it wouldn't be dropped from memory
-            // automatically, unless all references are removed
-            // for which it would need to be removed from the `queries` vec.
-            cache_time: None,
-        }
-    }
 }
 
 const FIX_MINUTES_MS: i32 = 5 * 60 * 1000;
@@ -411,27 +438,59 @@ where
 }
 
 #[derive(Default)]
-pub struct MutationOptions<Rt, F>
-where
-    F: Fn(Rt),
-{
-    pub on_success: Option<F>,
-    pub on_settled: Option<F>,
-    pub on_error: Option<F>,
-    return_type: PhantomData<Rt>,
+pub struct MutationOptions<Rt> {
+    pub on_success: Option<FnPtr<Rc<Rt>, ()>>,
+    pub on_settled: Option<FnPtr<(), ()>>,
+    pub on_error: Option<FnPtr<String, ()>>,
+    // return_type: PhantomData<&'a Rt>,
 }
 
-pub fn use_mutation<Arg, Rt, Cb, F>(
-    func: F,
-    options: MutationOptions<Rt, F>,
-) -> (Box<F>, MutationState<Rt>)
+type MutationResult<Arg, Rt> = (Box<CB<Arg, Result<Rt, String>>>, MutationState<Rt>);
+
+// change the API to builder pattern maybe?
+pub fn use_mutation<Arg, Rt, Cb>(func: Cb, options: MutationOptions<Rt>) -> MutationResult<Arg, Rt>
 where
-    Rt: Clone + PartialEq + Debug,
-    Cb: 'static + Fn(()) -> Pin<Box<dyn Future<Output = Result<Rt, String>>>>,
-    F: Fn(Rt),
+    Arg: 'static,
+    Rt: Clone + PartialEq + Debug + 'static,
+    Cb: 'static + Fn(Arg) -> Pin<Box<dyn Future<Output = Result<Rt, String>>>>,
 {
+    let ptr = FnPtr::from(func);
+    let options = Rc::new(options);
+    let mutate = {
+        Box::new(move |arg: Arg| {
+            let ptr = ptr.clone();
+            let options = options.clone();
+
+            Box::pin(async move {
+                let result = ptr.emit(arg).await;
+
+                macro_rules! call {
+                    ($func:ident, $value:expr) => {
+                        if let Some($func) = &options.$func {
+                            $func.emit($value).await
+                        }
+                    };
+                }
+
+                match &result {
+                    Ok(result) => {
+                        let result_rc = Rc::new(result.clone());
+                        call!(on_success, result_rc.clone())
+                    }
+                    Err(err) => {
+                        call!(on_error, err.clone());
+                    }
+                };
+
+                call!(on_settled, ());
+
+                result
+            }) as Pin<Box<dyn Future<Output = Result<Rt, String>>>>
+        })
+    };
+
     (
-        Box::new(func),
+        mutate,
         MutationState {
             status: Status::Idle,
         },
@@ -472,7 +531,6 @@ where
 
     {
         let observer_ref = observer_ref.clone();
-        let rerender = rerender.clone();
 
         use_effect_with_deps(
             move |_| {
@@ -609,7 +667,7 @@ pub mod devtools {
                     <span style="">
                         { if query.state.is_fetching {
                             html! { <span style="">{ "fetching" }</span> }
-                        } else if query.subscribers.len() == 0 {
+                        } else if query.subscribers.is_empty() {
                             html! { <span style="">{ "inactive" }</span> }
                         } else if let Status::Success(_) = query.state.status {
                             html! { <span style="">{ "success" }</span> }
@@ -623,18 +681,15 @@ pub mod devtools {
             }
         });
 
-        {
-            let mut client = client.clone();
+        use_effect_with_deps(
+            move |_| {
+                let mut client = client.clone();
+                client.subscribe(rerender.clone());
 
-            use_effect_with_deps(
-                move |_| {
-                    client.subscribe(rerender.clone());
-
-                    move || client.unsubscribe(rerender.clone())
-                },
-                (),
-            )
-        }
+                move || client.unsubscribe(rerender.clone())
+            },
+            (),
+        );
 
         html! {
             <div style="background-color: black; color: white;">
